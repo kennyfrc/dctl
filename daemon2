@@ -1,20 +1,73 @@
 #!/bin/bash
 
 # daemon2 - A wrapper around daemon that handles relative paths and working directories
-# Usage: daemon2 [daemon-flags] -- command [args...]
+# Usage: daemon2 [daemon-flags] [--] command [args...]
 # 
 # This wrapper:
 # 1. Automatically converts relative paths to absolute paths
 # 2. Sets -D (working directory) to current directory if not specified
 # 3. Sets -o (output log) to ./name.log if not specified
 # 4. Passes through all other daemon flags unchanged
+# 5. The -- separator is optional for consistency with daemon
 
-# Parse daemon flags until we hit --
+# Parse daemon flags until we hit -- or a non-flag argument
 DAEMON_ARGS=()
 NAME=""
 HAS_D_FLAG=false
 HAS_O_FLAG=false
 CURRENT_DIR="$(pwd)"
+
+# Check for help/version flags that should be passed directly to daemon
+for arg in "$@"; do
+    case "$arg" in
+        -h|--help|-V|--version|--list|--running|--restart|--stop)
+            exec daemon "$@"
+            ;;
+    esac
+done
+
+# Function to check if an argument looks like a daemon flag
+is_daemon_flag() {
+    case "$1" in
+        -h|--help|-V|--version|-v|--verbose*|-d|--debug*|-C|--config*|-N|--noconfig)
+            return 0 ;;
+        -n|--name*|-X|--command*|-P|--pidfiles*|-F|--pidfile*|-u|--user*|-R|--chroot*)
+            return 0 ;;
+        -D|--chdir*|-m|--umask*|-e|--env*|-i|--inherit|-U|--unsafe|-S|--safe)
+            return 0 ;;
+        -c|--core|--nocore|-r|--respawn|-a|--acceptable*|-A|--attempts*|-L|--delay*)
+            return 0 ;;
+        -M|--limit*|--idiot|-f|--foreground|-p|--pty*|-l|--errlog*|-b|--dbglog*)
+            return 0 ;;
+        -o|--output*|-O|--stdout*|-E|--stderr*|--ignore-eof|--read-eof)
+            return 0 ;;
+        --running|--restart|--stop|--signal*|--list)
+            return 0 ;;
+        -*)
+            # Unknown flag - pass it through as daemon might understand it
+            return 0 ;;
+        *)
+            return 1 ;;
+    esac
+}
+
+# Function to check if a flag expects an argument
+flag_expects_arg() {
+    case "$1" in
+        -v|--verbose|-d|--debug|-C|--config|-n|--name|-X|--command)
+            return 0 ;;
+        -P|--pidfiles|-F|--pidfile|-u|--user|-R|--chroot|-D|--chdir)
+            return 0 ;;
+        -m|--umask|-e|--env|-a|--acceptable|-A|--attempts|-L|--delay)
+            return 0 ;;
+        -M|--limit|-p|--pty|-l|--errlog|-b|--dbglog|-o|--output)
+            return 0 ;;
+        -O|--stdout|-E|--stderr|--signal)
+            return 0 ;;
+        *)
+            return 1 ;;
+    esac
+}
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -25,7 +78,7 @@ while [[ $# -gt 0 ]]; do
         -n|--name)
             DAEMON_ARGS+=("$1")
             shift
-            if [[ $# -gt 0 ]]; then
+            if [[ $# -gt 0 ]] && [[ "$1" != -* ]]; then
                 NAME="$1"
                 DAEMON_ARGS+=("$1")
                 shift
@@ -35,7 +88,7 @@ while [[ $# -gt 0 ]]; do
             HAS_D_FLAG=true
             DAEMON_ARGS+=("$1")
             shift
-            if [[ $# -gt 0 ]]; then
+            if [[ $# -gt 0 ]] && [[ "$1" != -* ]]; then
                 # Convert relative directory to absolute
                 if [[ "$1" != /* ]]; then
                     DAEMON_ARGS+=("$CURRENT_DIR/$1")
@@ -49,7 +102,7 @@ while [[ $# -gt 0 ]]; do
             HAS_O_FLAG=true
             DAEMON_ARGS+=("$1")
             shift
-            if [[ $# -gt 0 ]]; then
+            if [[ $# -gt 0 ]] && [[ "$1" != -* ]]; then
                 # Convert relative log path to absolute
                 if [[ "$1" != /* ]]; then
                     DAEMON_ARGS+=("$CURRENT_DIR/$1")
@@ -62,7 +115,7 @@ while [[ $# -gt 0 ]]; do
         -F|--pidfile)
             DAEMON_ARGS+=("$1")
             shift
-            if [[ $# -gt 0 ]]; then
+            if [[ $# -gt 0 ]] && [[ "$1" != -* ]]; then
                 # Convert relative pidfile path to absolute
                 if [[ "$1" != /* ]]; then
                     DAEMON_ARGS+=("$CURRENT_DIR/$1")
@@ -72,17 +125,45 @@ while [[ $# -gt 0 ]]; do
                 shift
             fi
             ;;
-        *)
+        -P|--pidfiles|-R|--chroot|-C|--config)
+            # Flags that take path arguments - convert relative to absolute
             DAEMON_ARGS+=("$1")
             shift
+            if [[ $# -gt 0 ]] && [[ "$1" != -* ]]; then
+                if [[ "$1" != /* ]]; then
+                    DAEMON_ARGS+=("$CURRENT_DIR/$1")
+                else
+                    DAEMON_ARGS+=("$1")
+                fi
+                shift
+            fi
+            ;;
+        *)
+            # Check if this is a known flag
+            if is_daemon_flag "$1"; then
+                DAEMON_ARGS+=("$1")
+                # Check if this flag expects an argument
+                if flag_expects_arg "$1"; then
+                    shift
+                    if [[ $# -gt 0 ]] && [[ "$1" != -* ]]; then
+                        DAEMON_ARGS+=("$1")
+                        shift
+                    fi
+                else
+                    shift
+                fi
+            else
+                # Not a flag - this must be the command
+                break
+            fi
             ;;
     esac
 done
 
-# Now process the command after --
+# Now process the command
 if [[ $# -eq 0 ]]; then
-    echo "Error: No command specified after --"
-    echo "Usage: daemon2 [daemon-flags] -- command [args...]"
+    echo "Error: No command specified"
+    echo "Usage: daemon2 [daemon-flags] [--] command [args...]"
     exit 1
 fi
 
