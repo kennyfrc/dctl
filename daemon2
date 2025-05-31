@@ -1,0 +1,125 @@
+#!/bin/bash
+
+# daemon2 - A wrapper around daemon that handles relative paths and working directories
+# Usage: daemon2 [daemon-flags] -- command [args...]
+# 
+# This wrapper:
+# 1. Automatically converts relative paths to absolute paths
+# 2. Sets -D (working directory) to current directory if not specified
+# 3. Sets -o (output log) to ./name.log if not specified
+# 4. Passes through all other daemon flags unchanged
+
+# Parse daemon flags until we hit --
+DAEMON_ARGS=()
+NAME=""
+HAS_D_FLAG=false
+HAS_O_FLAG=false
+CURRENT_DIR="$(pwd)"
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --)
+            shift
+            break
+            ;;
+        -n|--name)
+            DAEMON_ARGS+=("$1")
+            shift
+            if [[ $# -gt 0 ]]; then
+                NAME="$1"
+                DAEMON_ARGS+=("$1")
+                shift
+            fi
+            ;;
+        -D|--chdir)
+            HAS_D_FLAG=true
+            DAEMON_ARGS+=("$1")
+            shift
+            if [[ $# -gt 0 ]]; then
+                # Convert relative directory to absolute
+                if [[ "$1" != /* ]]; then
+                    DAEMON_ARGS+=("$CURRENT_DIR/$1")
+                else
+                    DAEMON_ARGS+=("$1")
+                fi
+                shift
+            fi
+            ;;
+        -o|--output)
+            HAS_O_FLAG=true
+            DAEMON_ARGS+=("$1")
+            shift
+            if [[ $# -gt 0 ]]; then
+                # Convert relative log path to absolute
+                if [[ "$1" != /* ]]; then
+                    DAEMON_ARGS+=("$CURRENT_DIR/$1")
+                else
+                    DAEMON_ARGS+=("$1")
+                fi
+                shift
+            fi
+            ;;
+        -F|--pidfile)
+            DAEMON_ARGS+=("$1")
+            shift
+            if [[ $# -gt 0 ]]; then
+                # Convert relative pidfile path to absolute
+                if [[ "$1" != /* ]]; then
+                    DAEMON_ARGS+=("$CURRENT_DIR/$1")
+                else
+                    DAEMON_ARGS+=("$1")
+                fi
+                shift
+            fi
+            ;;
+        *)
+            DAEMON_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+# Now process the command after --
+if [[ $# -eq 0 ]]; then
+    echo "Error: No command specified after --"
+    echo "Usage: daemon2 [daemon-flags] -- command [args...]"
+    exit 1
+fi
+
+# Get the command
+COMMAND="$1"
+shift
+COMMAND_ARGS=("$@")
+
+# Convert relative command path to absolute
+if [[ "$COMMAND" == ./* ]] || [[ "$COMMAND" == ../* ]]; then
+    # Relative path - convert to absolute
+    ABS_COMMAND="$(cd "$(dirname "$COMMAND")" 2>/dev/null && pwd)/$(basename "$COMMAND")"
+    if [[ -f "$ABS_COMMAND" ]]; then
+        COMMAND="$ABS_COMMAND"
+    else
+        # Try from current directory
+        COMMAND="$CURRENT_DIR/${COMMAND#./}"
+    fi
+elif [[ "$COMMAND" != /* ]] && [[ ! -x "$(command -v "$COMMAND")" ]]; then
+    # Not an absolute path and not in PATH - check if it exists in current dir
+    if [[ -f "$CURRENT_DIR/$COMMAND" ]]; then
+        COMMAND="$CURRENT_DIR/$COMMAND"
+    fi
+fi
+
+# Add default -D flag if not specified
+if [[ "$HAS_D_FLAG" == false ]]; then
+    DAEMON_ARGS+=("-D" "$CURRENT_DIR")
+fi
+
+# Add default -o flag if not specified and we have a name
+if [[ "$HAS_O_FLAG" == false ]] && [[ -n "$NAME" ]]; then
+    DAEMON_ARGS+=("-o" "$CURRENT_DIR/${NAME}.log")
+fi
+
+# Debug output (comment out in production)
+# echo "daemon ${DAEMON_ARGS[@]} -- $COMMAND ${COMMAND_ARGS[@]}"
+
+# Execute the real daemon command
+exec daemon "${DAEMON_ARGS[@]}" -- "$COMMAND" "${COMMAND_ARGS[@]}"
