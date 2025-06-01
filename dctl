@@ -1,20 +1,16 @@
 #!/bin/bash
 
-# daemon2 - A wrapper around daemon that handles relative paths and working directories
-# Usage: daemon2 [daemon-flags] [--] command [args...]
-# 
-# This wrapper:
-# 1. Automatically converts relative paths to absolute paths
-# 2. Sets -D (working directory) to current directory if not specified
-# 3. Sets -o (output log) to ./name.log if not specified
-# 4. Passes through all other daemon flags unchanged
-# 5. The -- separator is optional for consistency with daemon
+# dctl - Daemon control wrapper that handles paths and prints PIDs
+# A wrapper around daemon that prints the daemon PID to stdout
+# Usage: dctl [daemon-flags] [--] command [args...]
 
 # Parse daemon flags until we hit -- or a non-flag argument
 DAEMON_ARGS=()
 NAME=""
 HAS_D_FLAG=false
 HAS_O_FLAG=false
+HAS_F_FLAG=false
+PIDFILE=""
 CURRENT_DIR="$(pwd)"
 
 # Check for help/version flags that should be passed directly to daemon
@@ -113,13 +109,16 @@ while [[ $# -gt 0 ]]; do
             fi
             ;;
         -F|--pidfile)
+            HAS_F_FLAG=true
             DAEMON_ARGS+=("$1")
             shift
             if [[ $# -gt 0 ]] && [[ "$1" != -* ]]; then
                 # Convert relative pidfile path to absolute
                 if [[ "$1" != /* ]]; then
+                    PIDFILE="$CURRENT_DIR/$1"
                     DAEMON_ARGS+=("$CURRENT_DIR/$1")
                 else
+                    PIDFILE="$1"
                     DAEMON_ARGS+=("$1")
                 fi
                 shift
@@ -163,7 +162,7 @@ done
 # Now process the command
 if [[ $# -eq 0 ]]; then
     echo "Error: No command specified"
-    echo "Usage: daemon2 [daemon-flags] [--] command [args...]"
+    echo "Usage: dctl [daemon-flags] [--] command [args...]"
     exit 1
 fi
 
@@ -189,6 +188,13 @@ elif [[ "$COMMAND" != /* ]] && [[ ! -x "$(command -v "$COMMAND")" ]]; then
     fi
 fi
 
+# Generate a random name if none was provided
+if [[ -z "$NAME" ]]; then
+    # Generate random name with timestamp and random number
+    NAME="daemon_$$_$(date +%s)_$RANDOM"
+    DAEMON_ARGS+=("-n" "$NAME")
+fi
+
 # Add default -D flag if not specified
 if [[ "$HAS_D_FLAG" == false ]]; then
     DAEMON_ARGS+=("-D" "$CURRENT_DIR")
@@ -199,8 +205,52 @@ if [[ "$HAS_O_FLAG" == false ]] && [[ -n "$NAME" ]]; then
     DAEMON_ARGS+=("-o" "$CURRENT_DIR/${NAME}.log")
 fi
 
-# Debug output (comment out in production)
-# echo "daemon ${DAEMON_ARGS[@]} -- $COMMAND ${COMMAND_ARGS[@]}"
+# Determine pidfile location
+if [[ -n "$PIDFILE" ]]; then
+    # Already set from -F flag
+    true
+elif [[ -n "$NAME" ]]; then
+    # Determine default pidfile location based on user
+    if [[ $EUID -eq 0 ]]; then
+        # Root user
+        if [[ "$(uname)" == "Darwin" ]]; then
+            # macOS
+            if [[ -d "/opt/local/var/run" ]]; then
+                # MacPorts installation
+                PIDFILE="/opt/local/var/run/${NAME}.pid"
+            else
+                PIDFILE="/var/run/${NAME}.pid"
+            fi
+        elif [[ "$(uname)" == "SunOS" ]]; then
+            # Solaris
+            PIDFILE="/etc/${NAME}.pid"
+        else
+            # Linux and other Unix
+            PIDFILE="/var/run/${NAME}.pid"
+        fi
+    else
+        # Normal user
+        PIDFILE="/tmp/${NAME}.pid"
+    fi
+fi
 
-# Execute the real daemon command
-exec daemon "${DAEMON_ARGS[@]}" -- "$COMMAND" "${COMMAND_ARGS[@]}"
+# Execute the daemon command
+daemon "${DAEMON_ARGS[@]}" -- "$COMMAND" "${COMMAND_ARGS[@]}"
+DAEMON_EXIT_CODE=$?
+
+# If daemon started successfully and we have a pidfile, try to read and print the PID
+if [[ $DAEMON_EXIT_CODE -eq 0 ]] && [[ -n "$PIDFILE" ]]; then
+    # Give daemon a moment to create the pidfile
+    for i in {1..10}; do
+        if [[ -f "$PIDFILE" ]]; then
+            PID=$(cat "$PIDFILE" 2>/dev/null)
+            if [[ -n "$PID" ]]; then
+                echo "$PID"
+                break
+            fi
+        fi
+        sleep 0.1
+    done
+fi
+
+exit $DAEMON_EXIT_CODE
