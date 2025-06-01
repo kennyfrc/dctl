@@ -1,1 +1,21 @@
+# Log files
+*.log
+
+# PID files
+*.pid
+
+# Distribution files
+dist/
+
+# macOS
+.DS_Store
+
+# Editor files
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+*.bak
 .aider*
