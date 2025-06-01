@@ -140,6 +140,7 @@ daemon(1), systemd(1), launchd(8), start-stop-daemon(8)
 
 Report bugs at: https://github.com/kennyfrc/dctl/issues
 
-## COPYRIGHT
+## LICENSE
 
-This is free software; see the source for copying conditions. There is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+MIT License - see [LICENSE](LICENSE) file for details.
+
