@@ -2,7 +2,9 @@
 
 # dctl - Daemon control wrapper that handles paths and prints PIDs
 # A wrapper around daemon that prints the daemon PID to stdout
-# Usage: dctl [daemon-flags] [--] command [args...]
+# Usage: dctl [daemon-flags] [-w file] [--] command [args...]
+# Options:
+#   -w, --write-info file    Write process name and PID to file
 
 # Parse daemon flags until we hit -- or a non-flag argument
 DAEMON_ARGS=()
@@ -10,6 +12,8 @@ NAME=""
 HAS_D_FLAG=false
 HAS_O_FLAG=false
 HAS_F_FLAG=false
+HAS_W_FLAG=false
+WRITE_INFO_FILE=""
 PIDFILE=""
 CURRENT_DIR="$(pwd)"
 
@@ -106,6 +110,22 @@ while [[ $# -gt 0 ]]; do
                     DAEMON_ARGS+=("$1")
                 fi
                 shift
+            fi
+            ;;
+        -w|--write-info)
+            HAS_W_FLAG=true
+            shift
+            if [[ $# -gt 0 ]] && [[ "$1" != -* ]]; then
+                # Convert relative write info path to absolute
+                if [[ "$1" != /* ]]; then
+                    WRITE_INFO_FILE="$CURRENT_DIR/$1"
+                else
+                    WRITE_INFO_FILE="$1"
+                fi
+                shift
+            else
+                echo "Error: -w/--write-info requires a file path"
+                exit 1
             fi
             ;;
         -F|--pidfile)
@@ -245,7 +265,14 @@ if [[ $DAEMON_EXIT_CODE -eq 0 ]] && [[ -n "$PIDFILE" ]]; then
         if [[ -f "$PIDFILE" ]]; then
             PID=$(cat "$PIDFILE" 2>/dev/null)
             if [[ -n "$PID" ]]; then
-                echo "$PID"
+                # Print name and PID to stdout
+                echo "$NAME $PID"
+                
+                # Write to info file if requested
+                if [[ -n "$WRITE_INFO_FILE" ]]; then
+                    echo "$NAME $PID" > "$WRITE_INFO_FILE"
+                fi
+                
                 break
             fi
         fi
